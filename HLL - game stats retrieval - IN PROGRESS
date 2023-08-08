@@ -1,0 +1,241 @@
+# Important notes and updates to come:
+# This code pulls stats from a public API endpoint and is intended to pull all game stats and enter into a singular SQL database for further analysis.
+# Upcoming code updates:
+# 1. Needs to skip existing games in the database
+# 2. Needs to loop through active servers. Two options are to save to four separate databases or create additional tables in the one database.
+# 3. Visualization! I'm planning to work on this via SQL queries and Power BI for more experience there, but might return for python implementation later.
+
+
+import aiohttp
+import asyncio
+import json
+import os
+
+import sqlite3
+
+
+# Function to insert data into the SQL table
+def insert_maps_data_into_table(data):
+    if data is None:
+        print("No data to insert.")
+        return
+
+    connection = sqlite3.connect('game_output.db')
+    cursor = connection.cursor()
+
+    # Create the table (if it doesn't exist) with the desired columns
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS maps 
+                    (
+                    just_name TEXT, 
+                    long_name TEXT, 
+                    id INTEGER PRIMARY KEY, 
+                    creation_time TEXT, 
+                    start TEXT, 
+                    end TEXT, 
+                    server_number INTEGER, 
+                    map_name TEXT
+                    )
+    ''')
+
+    # Extract and insert data into the table
+    for map_data in data:
+        cursor.execute('''INSERT OR IGNORE INTO maps 
+                        (just_name, long_name, id, creation_time, start, end, server_number, map_name) 
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)''',
+                       (data.get('just_name'), data.get('long_name'), data.get('id'), data.get('creation_time'),
+                        data.get('start'), data.get('end'), data.get('server_number'), data.get('map_name')
+                        ))
+
+    # Commit the changes and close the connection
+    connection.commit()
+    connection.close()
+
+
+def insert_stats_data_into_table(data):
+    if data is None:
+        print("No data to insert.")
+        return
+
+    connection = sqlite3.connect('game_output.db')
+    cursor = connection.cursor()
+
+    # Create the table (if it doesn't exist) with the desired columns
+    cursor.execute('''
+    CREATE TABLE IF NOT EXISTS stats
+                    (
+                    maps_id INTEGER,
+                    map_name TEXT,
+                    id INTEGER, 
+                    player_id INTEGER, 
+                    steam_64_id INTEGER PRIMARY KEY, 
+                    player_name TEXT, 
+                    kills INTEGER,
+                    kills_streak INTEGER,
+                    deaths INTEGER,
+                    deaths_without_kill_streak INTEGER,
+                    teamkills INTEGER,
+                    teamkills_streak INTEGER,
+                    death_by_tk INTEGER,
+                    deaths_by_tk_streak INTEGER,
+                    kills_per_minute INTEGER,
+                    deaths_per_minute INTEGER,
+                    kill_death_ratio INTEGER,
+                    longest_life_secs INTEGER,
+                    shortest_life_secs INTEGER,
+                    combat INTEGER,
+                    offense INTEGER,
+                    defense INTEGER,
+                    support INTEGER
+                    )
+    ''')
+
+    # Extract and insert data into the table
+    if 'match_data' in data and 'result' in data['match_data']:
+        player_stats = data['match_data']['result']['player_stats']
+        if isinstance(player_stats, list):
+            for player_stat in player_stats:
+                cursor.execute('''INSERT OR IGNORE INTO stats 
+                                (                   
+                                maps_id,
+                                map_name,
+                                id,
+                                player_id,
+                                steam_64_id,
+                                player_name,
+                                kills,
+                                kills_streak,
+                                deaths,
+                                deaths_without_kill_streak,
+                                teamkills,
+                                teamkills_streak,
+                                death_by_tk,
+                                deaths_by_tk_streak,
+                                kills_per_minute,
+                                deaths_per_minute,
+                                kill_death_ratio,
+                                longest_life_secs,
+                                shortest_life_secs,
+                                combat,
+                                offense,
+                                defense,
+                                support
+                                ) 
+                                VALUES (?, ?, ?, ?, ?, 
+                                        ?, ?, ?, ?, ?,
+                                        ?, ?, ?, ?, ?,
+                                        ?, ?, ?, ?, ?,
+                                        ?, ?, ?)
+                                ''',
+                               (
+                                   data.get('id'),
+                                   data['map_name'],
+                                   player_stat.get('id'),
+                                   player_stat.get('player_id'),
+                                   int(player_stat.get('steam_id_64')),
+                                   player_stat.get('player'),
+                                   player_stat.get('kills'),
+                                   player_stat.get('kills_streak'),
+                                   player_stat.get('deaths'),
+                                   player_stat.get('deaths_without_kill_streak'),
+                                   player_stat.get('teamkills'),
+                                   player_stat.get('teamkills_streak'),
+                                   player_stat.get('deaths_by_tk'),
+                                   player_stat.get('deaths_by_tk_streak'),
+                                   player_stat.get('kills_per_minute'),
+                                   player_stat.get('deaths_per_minute'),
+                                   player_stat.get('kill_death_ratio'),
+                                   player_stat.get('longest_life_secs'),
+                                   player_stat.get('shortest_life_secs'),
+                                   player_stat.get('combat'),
+                                   player_stat.get('offense'),
+                                   player_stat.get('defense'),
+                                   player_stat.get('support'),
+                               ))
+
+    # Commit the changes and close the connection
+    connection.commit()
+    connection.close()
+
+
+
+
+async def call_api(url):
+    async with aiohttp.ClientSession() as session:
+        async with session.get(f'{url}') as response:
+            # print(f'-'*os.get_terminal_size()[0])
+            # print('-' * 80)
+            # print("URL:", response.url)
+            # print("Status:", response.status)
+            # print("Content-type:", response.headers['content-type'])
+            # # print(f'-'*os.get_terminal_size()[0])
+            # print('-' * 80)
+            # print(f'\n')
+
+            data = await response.json()
+
+        return data, response.status
+
+
+async def run_matches():
+    page = 1
+    maps = []
+    while True:
+        page_count = page
+        url = 'https://crcon-west.theline.gg/api/get_scoreboard_maps'
+        pagination = f'page={page_count}'
+        to_join = (url, pagination)
+        final_url = "?".join(to_join)
+        data = await call_api(final_url)
+        page += 1
+
+        if (len(data[0].get('result').get('maps')) != 0):
+            for match in (data[0].get('result').get('maps')):
+                single_match_data = await run_match_single(match)
+                maps.append(single_match_data)
+
+        '''pagination past the max length of matches still sends a 200 but with an empty maps array'''
+        if (len(data[0].get('result').get('maps')) == 0):
+            break
+
+
+    # print(f'*' * os.get_terminal_size()[0])
+    print(f'Match Count: {len(maps)}')
+    # print(f'*' * os.get_terminal_size()[0])
+
+
+
+    '''Write Match Info List to JSON'''
+    json_data = json.dumps(maps)
+    with open('matches.json', 'w') as outfile:
+        outfile.write(json_data)
+
+    python_formatted_json = json.loads(json_data)
+    # insert_stats_data_into_table(python_formatted_json)
+
+async def run_match_single(data):
+    '''data is an array of json objects'''
+
+    url = 'https://crcon-west.theline.gg/api/get_map_scoreboard'
+    match_id = f"map_id={data.get('id')}"
+    to_join = (url, match_id)
+    final_url = '?'.join(to_join)
+    match_data = await call_api(final_url)
+    data.update({'match_data': match_data[0]})
+
+    json_formatted_str = json.dumps(data, indent=4)
+    # print(f'{json_formatted_str}')
+
+    python_formatted_json = json.loads(json_formatted_str)
+    # print(python_formatted_json)
+    insert_maps_data_into_table(python_formatted_json)
+
+    python_formatted_json.get('match_data').get('result').get('player_stats')
+    insert_stats_data_into_table(python_formatted_json)
+
+    return data
+
+
+
+if __name__ == '__main__':
+    asyncio.run(run_matches())
